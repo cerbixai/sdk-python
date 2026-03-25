@@ -8,7 +8,7 @@ Wraps any httpx.AsyncClient to automatically:
 
 Developer experience — 3 lines of code:
 
-    from sdk.interceptor import wrap
+    from cerbix_sdk.interceptor import wrap
 
     client = wrap(httpx.AsyncClient(), org_id="...", agent_id="...")
     # Works whether CerbiX is up or down. Zero behaviour change.
@@ -19,8 +19,8 @@ from typing import Optional
 
 import httpx
 
-from sdk.client import AgentGateClient
-from sdk.resilience import ProxyState, ResilientClient
+from cerbix_sdk.client import AgentGateClient
+from cerbix_sdk.resilience import ProxyState, ResilientClient
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def wrap(
 
     Usage:
         import httpx
-        from sdk.interceptor import wrap
+        from cerbix_sdk.interceptor import wrap
 
         client = wrap(httpx.AsyncClient(), org_id="...", agent_id="...")
         resp = await client.get("https://api.example.com/data")
@@ -134,7 +134,7 @@ def wrap_sync(
     """Get headers dict for synchronous HTTP clients.
 
     Usage:
-        from sdk.interceptor import wrap_sync
+        from cerbix_sdk.interceptor import wrap_sync
         headers = wrap_sync(org_id="...", agent_id="...")
         requests.get("https://api.example.com", headers=headers)
     """

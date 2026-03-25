@@ -2,8 +2,8 @@
 
 from typing import Any, List
 
-from sdk.client import AgentGateClient
-from sdk.mcp import AgentGateMCPClient
+from cerbix_sdk.client import AgentGateClient
+from cerbix_sdk.mcp import AgentGateMCPClient
 
 # LangChain is an optional dependency
 try:

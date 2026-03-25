@@ -3,7 +3,7 @@
 import itertools
 from typing import Any, Dict, List, Optional
 
-from sdk.client import AgentGateClient
+from cerbix_sdk.client import AgentGateClient
 
 
 class AgentGateMCPClient:

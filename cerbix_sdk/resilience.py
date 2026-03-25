@@ -275,7 +275,7 @@ class ResilientClient:
     """Wraps AgentGateClient with health checking, caching, and buffering.
 
     Usage:
-        from sdk.resilience import ResilientClient
+        from cerbix_sdk.resilience import ResilientClient
 
         client = ResilientClient(
             control_url="https://cerbix-ai.web.app/api/control",
