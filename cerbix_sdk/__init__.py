@@ -7,6 +7,7 @@ Usage:
     client = wrap(httpx.AsyncClient(), org_id="...", agent_id="...")
 """
 
+from cerbix_sdk.audit_levels import AuditLevel, effective_level
 from cerbix_sdk.auth import generate_pkce_pair
 from cerbix_sdk.client import AgentGateClient
 from cerbix_sdk.interceptor import (
@@ -31,4 +32,6 @@ __all__ = [
     "resolve_scope",
     "check_scope",
     "setup_structured_logging",
+    "AuditLevel",
+    "effective_level",
 ]

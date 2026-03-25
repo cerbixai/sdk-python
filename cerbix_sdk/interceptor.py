@@ -24,6 +24,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
+from cerbix_sdk.audit_levels import AuditLevel, filter_event, effective_level
 from cerbix_sdk.client import AgentGateClient
 from cerbix_sdk.resilience import ProxyState, ResilientClient
 
@@ -173,11 +174,67 @@ class CerbiTransport(httpx.AsyncBaseTransport):
         resilient: ResilientClient,
         declared_scopes: Optional[List[str]] = None,
         enforce_policy: bool = True,
+        audit_level: AuditLevel = AuditLevel.STANDARD,
+        session_id: Optional[str] = None,
     ):
         self._wrapped = wrapped
         self._resilient = resilient
         self._declared_scopes = declared_scopes or []
         self._enforce_policy = enforce_policy
+        self._audit_level = audit_level
+        self._session_id = session_id or f"s_{uuid.uuid4().hex[:12]}"
+        from cerbix_sdk import __version__ as _sdk_version
+        self._sdk_version = _sdk_version
+
+    def _build_event(
+        self,
+        call_id: str,
+        timestamp: str,
+        resolved_scope: str,
+        host: str,
+        path: str,
+        method: str,
+        decision: str,
+        matched_scope: Optional[str],
+        latency_ms: int,
+        status_code: int,
+        state: ProxyState,
+        deny_reason: str = "",
+        response_size: int = 0,
+    ) -> Dict[str, object]:
+        """Build a full event dict then filter to the configured level."""
+        # Full forensic-level event (superset of all fields)
+        full_event: Dict[str, object] = {
+            # ── Mandatory (always included) ──
+            "org_id": self._resilient.org_id,
+            "agent_id": self._resilient.agent_id,
+            "timestamp": timestamp,
+            "decision": decision,
+            "sdk_state": state.value,
+            # ── Minimal ──
+            "action": resolved_scope,
+            "resource": f"{host}{path}",
+            # ── Standard ──
+            "http_method": method,
+            "target_host": host,
+            "target_path": path,
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+            # ── Enhanced ──
+            "scope_matched": matched_scope,
+            "policy_id": None,  # set by backend after eval
+            "call_id": call_id,
+            "response_size_bytes": response_size,
+            "delegation_depth": 0,
+            # ── Forensic ──
+            "session_id": self._session_id,
+            "sdk_version": self._sdk_version,
+            "retry_count": 0,
+            "deny_reason": deny_reason,
+            "source_ip": "",
+            "user_agent": f"cerbix-sdk/{self._sdk_version}",
+        }
+        return filter_event(full_event, self._audit_level)
 
     async def handle_async_request(
         self, request: httpx.Request
@@ -205,22 +262,17 @@ class CerbiTransport(httpx.AsyncBaseTransport):
         ):
             # Deny: record event and return 403
             try:
-                await self._resilient.record_event({
-                    "org_id": self._resilient.org_id,
-                    "agent_id": self._resilient.agent_id,
-                    "action": resolved_scope,
-                    "resource": f"{host}{path}",
-                    "http_method": request.method,
-                    "target_host": host,
-                    "target_path": path,
-                    "decision": "deny",
-                    "scope_matched": None,
-                    "timestamp": timestamp,
-                    "latency_ms": 0,
-                    "status_code": 403,
-                    "sdk_state": state.value,
-                    "call_id": call_id,
-                })
+                deny_event = self._build_event(
+                    call_id=call_id, timestamp=timestamp,
+                    resolved_scope=resolved_scope,
+                    host=host, path=path,
+                    method=request.method, decision="deny",
+                    matched_scope=None, latency_ms=0,
+                    status_code=403, state=state,
+                    deny_reason=f"scope {resolved_scope} not in "
+                    f"declared scopes",
+                )
+                await self._resilient.record_event(deny_event)
             except Exception:
                 pass
 
@@ -266,24 +318,21 @@ class CerbiTransport(httpx.AsyncBaseTransport):
         else:
             decision = "allow"
 
-        # ── Record full audit event (Gaps 2,3,5,6,7) ──
+        # ── Record audit event (filtered by audit level) ──
         try:
-            await self._resilient.record_event({
-                "org_id": self._resilient.org_id,
-                "agent_id": self._resilient.agent_id,
-                "action": resolved_scope,
-                "resource": f"{host}{path}",
-                "http_method": request.method,
-                "target_host": host,
-                "target_path": path,
-                "decision": decision,
-                "scope_matched": matched_scope,
-                "timestamp": timestamp,
-                "latency_ms": latency_ms,
-                "status_code": response.status_code,
-                "sdk_state": state.value,
-                "call_id": call_id,
-            })
+            event = self._build_event(
+                call_id=call_id, timestamp=timestamp,
+                resolved_scope=resolved_scope,
+                host=host, path=path,
+                method=request.method, decision=decision,
+                matched_scope=matched_scope,
+                latency_ms=latency_ms,
+                status_code=response.status_code,
+                state=state,
+                response_size=len(response.content)
+                if hasattr(response, 'content') else 0,
+            )
+            await self._resilient.record_event(event)
         except Exception:
             pass  # never block the response
 
@@ -319,6 +368,7 @@ def wrap(
     bypass_on_failure: bool = True,
     declared_scopes: Optional[List[str]] = None,
     enforce_policy: bool = True,
+    audit_level: str = "standard",
     gate_client: Optional[AgentGateClient] = None,
 ) -> httpx.AsyncClient:
     """Wrap an httpx.AsyncClient with resilient CerbiX governance.
@@ -357,11 +407,15 @@ def wrap(
         bypass_on_failure=bypass_on_failure,
     )
 
+    from cerbix_sdk.audit_levels import validate_level
+    level = validate_level(audit_level)
+
     original_transport = client._transport
     client._transport = CerbiTransport(
         original_transport, resilient,
         declared_scopes=declared_scopes,
         enforce_policy=enforce_policy,
+        audit_level=level,
     )
 
     original_close = client.aclose
