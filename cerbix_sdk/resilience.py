@@ -168,11 +168,29 @@ class AuditBuffer:
     """Local SQLite buffer for audit events when CerbiX is unreachable.
 
     Events are stored locally and synced when CerbiX recovers.
+
+    Rotation policy:
+        max_rows: hard cap on total rows (default 50,000). When exceeded,
+            oldest synced rows are deleted. If still over limit, oldest
+            unsynced rows are dropped with a warning.
+        ttl_hours: synced events older than this are auto-purged
+            (default 72 hours / 3 days).
+        cleanup runs automatically after every buffer() call once
+        per 100 inserts to avoid overhead.
     """
 
-    def __init__(self, db_path: str = ".cerbi/audit_buffer.db"):
+    def __init__(
+        self,
+        db_path: str = ".cerbi/audit_buffer.db",
+        max_rows: int = 50_000,
+        ttl_hours: int = 72,
+    ):
         Path(db_path).parent.mkdir(exist_ok=True)
         self._db_path = db_path
+        self._max_rows = max_rows
+        self._ttl_hours = ttl_hours
+        self._insert_count = 0
+        self._cleanup_interval = 100
         self._init_db()
 
     def _init_db(self) -> None:
@@ -189,7 +207,7 @@ class AuditBuffer:
         conn.close()
 
     def buffer(self, event: Dict[str, Any]) -> None:
-        """Store an event locally."""
+        """Store an event locally and run periodic cleanup."""
         conn = sqlite3.connect(self._db_path)
         conn.execute(
             "INSERT INTO buffered_events (event_json, created_at) "
@@ -199,11 +217,77 @@ class AuditBuffer:
         conn.commit()
         conn.close()
 
+        self._insert_count += 1
+        if self._insert_count % self._cleanup_interval == 0:
+            self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Purge old synced events and enforce max_rows."""
+        conn = sqlite3.connect(self._db_path)
+        try:
+            # 1. TTL: delete synced events older than ttl_hours
+            cutoff = datetime.utcnow()
+            # SQLite datetime comparison via string works with ISO format
+            from datetime import timedelta
+            cutoff_str = (cutoff - timedelta(hours=self._ttl_hours)).isoformat()
+            conn.execute(
+                "DELETE FROM buffered_events "
+                "WHERE synced = 1 AND created_at < ?",
+                (cutoff_str,),
+            )
+
+            # 2. Max rows: if still over limit, delete oldest synced first
+            cur = conn.execute("SELECT COUNT(*) FROM buffered_events")
+            total = cur.fetchone()[0]
+
+            if total > self._max_rows:
+                excess = total - self._max_rows
+                # Delete oldest synced rows first
+                conn.execute(
+                    "DELETE FROM buffered_events WHERE id IN ("
+                    "  SELECT id FROM buffered_events "
+                    "  WHERE synced = 1 ORDER BY id ASC LIMIT ?"
+                    ")",
+                    (excess,),
+                )
+
+            # 3. If STILL over limit, drop oldest unsynced (data loss)
+            cur = conn.execute("SELECT COUNT(*) FROM buffered_events")
+            total = cur.fetchone()[0]
+            if total > self._max_rows:
+                excess = total - self._max_rows
+                logger.warning(
+                    "Audit buffer overflow: dropping %d unsynced events "
+                    "(buffer=%d, max=%d)",
+                    excess, total, self._max_rows,
+                )
+                conn.execute(
+                    "DELETE FROM buffered_events WHERE id IN ("
+                    "  SELECT id FROM buffered_events "
+                    "  ORDER BY id ASC LIMIT ?"
+                    ")",
+                    (excess,),
+                )
+
+            conn.commit()
+        except Exception as e:
+            logger.warning("Buffer cleanup error: %s", e)
+        finally:
+            conn.close()
+
     def pending_count(self) -> int:
         conn = sqlite3.connect(self._db_path)
         cur = conn.execute(
             "SELECT COUNT(*) FROM buffered_events WHERE synced = 0"
         )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+
+    def total_count(self) -> int:
+        """Total rows including synced."""
+        conn = sqlite3.connect(self._db_path)
+        cur = conn.execute("SELECT COUNT(*) FROM buffered_events")
         count = cur.fetchone()[0]
         conn.close()
         return count

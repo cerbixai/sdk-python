@@ -15,6 +15,7 @@ Developer experience — 3 lines of code:
     # Works whether CerbiX is up or down. Zero behaviour change.
 """
 
+import json as _json
 import logging
 import time
 import uuid
@@ -26,7 +27,63 @@ import httpx
 from cerbix_sdk.client import AgentGateClient
 from cerbix_sdk.resilience import ProxyState, ResilientClient
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("cerbix_sdk")
+
+
+# ─── Structured Logging ──────────────────────────────────────────
+
+
+class _StructuredFormatter(logging.Formatter):
+    """JSON log formatter for production log aggregators."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        # Merge extra fields (call_id, decision, etc.)
+        if hasattr(record, "cerbi_data"):
+            entry.update(record.cerbi_data)
+        return _json.dumps(entry)
+
+
+def setup_structured_logging(
+    level: int = logging.DEBUG,
+    handler: Optional[logging.Handler] = None,
+) -> None:
+    """Enable structured JSON logging for the CerbiX SDK.
+
+    Usage:
+        from cerbix_sdk.interceptor import setup_structured_logging
+        setup_structured_logging()
+
+    This configures the 'cerbix_sdk' logger to emit JSON lines like:
+        {"timestamp":"2026-03-25T12:00:00Z","level":"DEBUG",
+         "logger":"cerbix_sdk","message":"...",
+         "call_id":"c_abc123","decision":"allow",...}
+    """
+    target = handler or logging.StreamHandler()
+    target.setFormatter(_StructuredFormatter())
+    sdk_logger = logging.getLogger("cerbix_sdk")
+    sdk_logger.setLevel(level)
+    sdk_logger.addHandler(target)
+
+
+def _log_event(
+    level: int,
+    msg: str,
+    call_id: str,
+    **extra: object,
+) -> None:
+    """Log with call_id correlation and optional structured data."""
+    record = logger.makeRecord(
+        logger.name, level, "(interceptor)", 0,
+        f"[{call_id}] {msg}", (), None,
+    )
+    record.cerbi_data = {"call_id": call_id, **extra}  # type: ignore
+    logger.handle(record)
 
 
 # ─── Scope Resolver ───────────────────────────────────────────────
@@ -167,10 +224,18 @@ class CerbiTransport(httpx.AsyncBaseTransport):
             except Exception:
                 pass
 
-            logger.warning(
-                "CerbiX DENY: %s %s://%s%s (scope=%s not in %s)",
-                request.method, request.url.scheme, host,
-                path, resolved_scope, self._declared_scopes,
+            _log_event(
+                logging.WARNING,
+                f"DENY {request.method} {request.url.scheme}://{host}{path}"
+                f" (scope={resolved_scope})",
+                call_id,
+                decision="deny",
+                http_method=request.method,
+                target_host=host,
+                target_path=path,
+                scope=resolved_scope,
+                status_code=403,
+                sdk_state=state.value,
             )
 
             return httpx.Response(
@@ -222,11 +287,21 @@ class CerbiTransport(httpx.AsyncBaseTransport):
         except Exception:
             pass  # never block the response
 
-        logger.debug(
-            "CerbiX [%s] %s: %s %s://%s%s → %s (%dms)",
-            state.value, decision, request.method,
-            request.url.scheme, host, path,
-            response.status_code, latency_ms,
+        _log_event(
+            logging.DEBUG,
+            f"[{state.value}] {decision}: {request.method}"
+            f" {request.url.scheme}://{host}{path}"
+            f" → {response.status_code} ({latency_ms}ms)",
+            call_id,
+            decision=decision,
+            http_method=request.method,
+            target_host=host,
+            target_path=path,
+            scope=resolved_scope,
+            scope_matched=matched_scope,
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            sdk_state=state.value,
         )
         return response
 
