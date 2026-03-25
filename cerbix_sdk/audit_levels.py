@@ -1,6 +1,6 @@
 """Audit level definitions for CerbiX.
 
-Four tiers of audit granularity. Each level includes all fields
+Three tiers of audit granularity. Each level includes all fields
 from the previous level plus additional fields.
 
 Mandatory fields (always captured, cannot be disabled):
@@ -20,7 +20,6 @@ from typing import Dict, FrozenSet, Optional, Set
 
 class AuditLevel(str, Enum):
     """Audit granularity levels, ordered from least to most verbose."""
-    MINIMAL = "minimal"
     STANDARD = "standard"
     ENHANCED = "enhanced"
     FORENSIC = "forensic"
@@ -38,12 +37,9 @@ MANDATORY_FIELDS: FrozenSet[str] = frozenset({
 
 # ─── Per-level additional fields ─────────────────────────────────
 
-_MINIMAL_FIELDS: FrozenSet[str] = frozenset({
+_STANDARD_FIELDS: FrozenSet[str] = frozenset({
     "action",         # semantic scope (api/read, db/write)
     "resource",       # host + path
-})
-
-_STANDARD_FIELDS: FrozenSet[str] = frozenset({
     "http_method",    # GET, POST, DELETE
     "target_host",    # full hostname
     "target_path",    # URL path
@@ -72,18 +68,14 @@ _FORENSIC_FIELDS: FrozenSet[str] = frozenset({
 # ─── Level → cumulative field set ────────────────────────────────
 
 LEVEL_FIELDS: Dict[AuditLevel, FrozenSet[str]] = {
-    AuditLevel.MINIMAL: (
-        MANDATORY_FIELDS | _MINIMAL_FIELDS
-    ),
     AuditLevel.STANDARD: (
-        MANDATORY_FIELDS | _MINIMAL_FIELDS | _STANDARD_FIELDS
+        MANDATORY_FIELDS | _STANDARD_FIELDS
     ),
     AuditLevel.ENHANCED: (
-        MANDATORY_FIELDS | _MINIMAL_FIELDS | _STANDARD_FIELDS
-        | _ENHANCED_FIELDS
+        MANDATORY_FIELDS | _STANDARD_FIELDS | _ENHANCED_FIELDS
     ),
     AuditLevel.FORENSIC: (
-        MANDATORY_FIELDS | _MINIMAL_FIELDS | _STANDARD_FIELDS
+        MANDATORY_FIELDS | _STANDARD_FIELDS
         | _ENHANCED_FIELDS | _FORENSIC_FIELDS
     ),
 }
@@ -131,13 +123,12 @@ def effective_level(
     Rules:
     - Org level sets the floor.
     - Agent level can elevate above the floor but never go below.
-    - A forensic-level org cannot have minimal-level agents.
+    - A forensic-level org cannot have standard-level agents.
     """
     if agent_level is None:
         return org_level
 
     order = [
-        AuditLevel.MINIMAL,
         AuditLevel.STANDARD,
         AuditLevel.ENHANCED,
         AuditLevel.FORENSIC,
