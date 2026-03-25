@@ -3,7 +3,7 @@
 from typing import Any, List
 
 from cerbix_sdk.client import AgentGateClient
-from cerbix_sdk.mcp import AgentGateMCPClient
+from cerbix_sdk.mcp import AgentGateMCPClient, AuditRecorder
 
 # LangChain is an optional dependency
 try:
@@ -52,11 +52,15 @@ class AgentGateToolkit:
         # Use tools with a LangChain agent
     """
 
-    def __init__(self, client: AgentGateClient):
+    def __init__(
+        self,
+        client: AgentGateClient,
+        audit_recorder: AuditRecorder = None,
+    ):
         if not HAS_LANGCHAIN:
             raise ImportError("langchain-core is required: pip install langchain-core")
         self._client = client
-        self._mcp = AgentGateMCPClient(client)
+        self._mcp = AgentGateMCPClient(client, audit_recorder=audit_recorder)
 
     async def get_tools(self) -> List[AgentGateTool]:
         """Discover tools via MCP tools/list and wrap as LangChain tools."""

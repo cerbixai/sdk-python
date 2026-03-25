@@ -9,14 +9,14 @@ Usage:
 
 from cerbix_sdk.auth import generate_pkce_pair
 from cerbix_sdk.client import AgentGateClient
-from cerbix_sdk.interceptor import wrap, wrap_sync
+from cerbix_sdk.interceptor import wrap, wrap_sync, resolve_scope, check_scope
 from cerbix_sdk.mcp import AgentGateMCPClient
 from cerbix_sdk.resilience import ResilientClient
 
 # User-friendly alias matching the get-started wizard
 CerbixSDK = AgentGateClient
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "CerbixSDK",
@@ -26,4 +26,6 @@ __all__ = [
     "generate_pkce_pair",
     "wrap",
     "wrap_sync",
+    "resolve_scope",
+    "check_scope",
 ]
